@@ -41,10 +41,10 @@ class FollowingState(State):
         self.cmd_vel = Twist()
         self.max_linear_vel = 0.22 / 2.0
         self.max_angular_vel = 2.84 / 2.0
-        self.speed = 0.05
+        self.speed = 0.1
 
         # init model
-        self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_ali.pt')
+        self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_krisna2.pt')
         self.frame_count = 0 # skip using yolo too frequently 
 
         # init aruco detection
@@ -84,35 +84,6 @@ class FollowingState(State):
         except CvBridgeError as e:
             self.node.get_logger().error(f'Error converting image: {e}')
 
-    def get_bounding_boxes(self, freq_count: int=3):
-        """Get all bounding boxes from the first result and draw it.
-        
-        Returns
-        -------
-        boxes: Tensor
-            A tensor contains a list of boxes. 
-
-            Each box contains x_center, y_center, width, height.
-        
-        Parameters
-        ----------
-        freq_count: int
-            - Increasing this value will increase speed but decrease accuracy.
-            - Decreasing this value will decrease speed but increase accuracy.
-        """
-        assert self.cv_image is not None, "No cv image received."
-
-        if self.frame_count % freq_count == 0:
-            results = self.model(self.cv_image)
-        self.frame_count += 1
-        self.rendered_image = results[0].plot() # Draw results
-
-        if len(results[0].boxes.xywh) == 0: # No boxes
-            return None
-
-        boxes = results[0].boxes.xywh
-        return boxes
-
     def get_follower_posi_and_dist(self, largest_box):
         """Get the follower's position and distance.
         
@@ -121,7 +92,7 @@ class FollowingState(State):
         posi: str
             position of follower in image: 'left', 'center', 'right'.
         dist: str
-            distance to follower: 'near', 'far', 'median'.
+            distance to follower: 'near', 'far', 'medium'.
 
         Parameters
         ----------
@@ -139,9 +110,14 @@ class FollowingState(State):
         else:
             posi = 'center'
 
-        if box_height > 0.6 * image_heigth:
+        who_model_dict = {
+            'ali': {'near': 0.4, 'far': 0.1},
+            'krisna': {'near': 0.95, 'far': 0.80}
+        }
+        model_dict = who_model_dict['krisna']
+        if box_height > model_dict['near'] * image_heigth:
             dist = "near"
-        elif box_height < 0.25 * image_heigth:
+        elif box_height < model_dict['far'] * image_heigth:
             dist = "far"
         else:
             dist = "medium"
@@ -168,6 +144,8 @@ class FollowingState(State):
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x - self.speed)
             case 'medium':
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x)
+                if self.cmd_vel.linear.x == 0: # check if there was no velocity published
+                    cmd_vel.linear.x = 0.1
             case 'far':
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x + self.speed)
 
@@ -179,6 +157,14 @@ class FollowingState(State):
             case 'right':
                 cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z - self.speed)
         return cmd_vel
+
+    def get_krisna_model_result(self, results):
+        boxes_data = results[0].boxes.data
+        boxes_xywh = results[0].boxes.xywh 
+        mask = boxes_data[:, 5] == 0
+        boxes = boxes_xywh[mask]
+
+        return boxes
 
     def image_processing_loop(self):
         no_detection_count = 0
@@ -196,22 +182,31 @@ class FollowingState(State):
                 break  # Exit thread
 
             # YOLO detection
-            results = self.model(self.cv_image)
+            results = self.model(self.cv_image, conf=0.6)
+            boxes = self.get_krisna_model_result(results)
+            # self.node.get_logger().info(f'{str(boxes)}')
+            np_boxes = boxes.cpu().numpy()
+            # boxes = results[0].boxes.xywh # ali's model
+
             self.rendered_image = results[0].plot()
-            if len(results[0].boxes.xywh) == 0:
+
+            # if len(results[0].boxes.xywh) == 0: # there is no band detected
+            if np_boxes.size == 0:
                 no_detection_count += 1
-                if no_detection_count > 10:
-                    self.yolo_result = 'target_lost'
+                self.vel_pub.publish(Twist())
+                if no_detection_count > 200:
                     self.pub_yolo_image()
+                    self.yolo_result = 'target_lost'
                     break
                 self.pub_yolo_image()
                 continue
             else:
                 no_detection_count = 0
 
-            boxes = results[0].boxes.xywh
             largest_box = max(boxes.cpu().numpy(), key=lambda x: x[2] * x[3])
+            self.node.get_logger().info(f'-----LARGEST BOX------: {str(largest_box)}')
             posi, dist = self.get_follower_posi_and_dist(largest_box)
+            self.node.get_logger().info(f'POSI: {posi}, DIST: {dist}')
             self.pub_yolo_image()
             cmd_vel = self.get_dynamic_vel(posi, dist)
             self.vel_pub.publish(cmd_vel)

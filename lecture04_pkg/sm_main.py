@@ -43,6 +43,7 @@ class StateMachineNode(Node):
             state=following.FollowingState(node=self),
             transitions={
                 'qr_found': 'DummyState',
+                'target_lost': 'DummyState',
                 # "qr_found": 'Go2GoalState',
                 # "target_lost": 'ScreamingState'
             },
