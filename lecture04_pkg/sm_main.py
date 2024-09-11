@@ -42,6 +42,7 @@ class StateMachineNode(Node):
             name="FollowingState",
             state=following.FollowingState(node=self),
             transitions={
+                'qr_found': 'DummyState',
                 # "qr_found": 'Go2GoalState',
                 # "target_lost": 'ScreamingState'
             },
@@ -56,6 +57,13 @@ class StateMachineNode(Node):
         #     state=screaming.ScreamingState(node=self),
         #     transitions={'target_found': 'FollowingState'},
         # )
+        sm.add_state(
+            name='DummyState',
+            state=init_state.DummyState(node=self),
+            transitions={
+                'loop': 'DummyState',
+            },
+        )
 
         # Publish state machine information to Yasmin Viewer
         YasminViewerPub(fsm_name="SM_MAIN", fsm=sm)
@@ -85,7 +93,10 @@ def main(args=None):
     try:
         node = StateMachineNode()
     except KeyboardInterrupt:
-        pass
+        # pass
+        shutdown(node)
+        node.destroy_node()
+        rclpy.shutdown()
     finally:
         shutdown(node)
         node.destroy_node()
