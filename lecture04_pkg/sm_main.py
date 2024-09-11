@@ -16,8 +16,8 @@ from yasmin_viewer import YasminViewerPub
 from .state_main import (
     init_state,
     following, 
-    # go2goal, 
-    # screaming
+    go2goal, 
+#    screaming
 )
 class StateMachineNode(Node):
     def __init__(self):
@@ -36,27 +36,33 @@ class StateMachineNode(Node):
         sm.add_state(
             name="InitState",
             state=init_state.InitState(node=self),
-            transitions={'succeed': "FollowingState"},
-        )
-        sm.add_state(
-            name="FollowingState",
-            state=following.FollowingState(node=self),
             transitions={
-                'qr_found': 'DummyState',
-                'target_lost': 'DummyState',
-                # "qr_found": 'Go2GoalState',
-                # "target_lost": 'ScreamingState'
+                # 'succeed': "FollowingState",
+                'succeed': 'Go2GoalState'
             },
         )
         # sm.add_state(
-        #     name='Go2GoalState',
-        #     state=go2goal.Go2GoalState(node=self),
-        #     transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
+        #     name="FollowingState",
+        #     state=following.FollowingState(node=self),
+        #     transitions={
+        #         'loop': 'FollowingState',
+        #         "qr_found": 'Go2GoalState',
+                # 'qr_found': 'DummyState',
+                # 'target_lost': 'DummyState',
+                # "target_lost": 'ScreamingState'
+        #     },
         # )
+        sm.add_state(
+            name='Go2GoalState',
+            state=go2goal.Go2GoalState(node=self),
+            transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
+        )
         # sm.add_state(
         #     name='ScreamingState',
         #     state=screaming.ScreamingState(node=self),
-        #     transitions={'target_found': 'FollowingState'},
+        #     transitions={
+        #         'target_found': 'FollowingState',
+        #         'exit': 'EXIT'},
         # )
         sm.add_state(
             name='DummyState',

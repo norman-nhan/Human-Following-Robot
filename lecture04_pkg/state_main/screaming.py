@@ -21,7 +21,7 @@ from yasmin import State, Blackboard
 
 class ScreamingState(State):
     def __init__(self, node: Node):
-        super().__init__(outcomes=['target_found'])
+        super().__init__(outcomes=['exit', 'target_found'])
 
         self.node = node
 
@@ -29,49 +29,58 @@ class ScreamingState(State):
         self.cv_image = None
         self.bridge = CvBridge()
 
-        self.audio_file = '../sounds/scream.mp3'
-        self.model = YOLO('../models/best_ali.pt')
-        self.mixer = pygame.mixer.init()
+        self.audio_file = 'lecture04_pkg/sounds/scream.mp3'
+        self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_krisna2.pt')
+        pygame.mixer.init()
         os.environ["SDL_AUDIODRIVER"] = "pulseaudio"
 
-        self.detect_log = "stop"
+        self.target_found = False
 
     def playSound(self):
-
-        self.mixer.music.load(self.audio_file)
-        self.mixer.music.play()
-        self.node.get_clock().sleep_for(Duration(seconds=0.5)) # wait for 0.5 but ros node still receiving signals 
+        pygame.mixer.music.load(self.audio_file)
+        pygame.mixer.music.play()
+        self.node.get_clock().sleep_for(Duration(seconds=2)) # wait for 0.5 but ros node still receiving signals 
 
     def callback(self, msg: Image): 
         """Get a cv image."""
-        self.node.get_logger().info('Receiving image')
+        self.node.get_logger().debug(f'{self.__class__.__name__}: Receiving image')
         try:
             self.cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8") # pass cv image to self.cv_image
         except CvBridgeError as e:
             self.node.get_logger().error(str(e))
-        return
+
+    def get_krisna_model_result(self, results):
+        boxes_data = results[0].boxes.data
+        boxes_xywh = results[0].boxes.xywh 
+        mask = boxes_data[:, 5] == 0
+        boxes = boxes_xywh[mask]
+
+        return boxes
 
     def execute(self, blackboard: Blackboard) -> str:
-        self.node.get_logger().info("Screaming State")
-        self.playSound()
+        self.node.get_logger().info("Executing Screaming State")
 
         while self.cv_image is None and rclpy.ok():
-            self.node.get_logger().info('Waiting for image')
-            self.node.get_clock().sleep_for(Duration(seconds=0.5))         
+            self.node.get_logger().info('Waiting for image...')
+            rclpy.spin_once(self.node, timeout_sec=0.1)
+            continue
 
         no_detection_count = 0
-        results = self.model(self.cv_image)
-        while (
-            len(results) == 0 or
-            results[0].boxes is None or
-            results[0].boxes.xywh is None or
-            len(results[0].boxes) == 0
-        ):
-            no_detection_count += 1
-            if no_detection_count > 3:
-                self.playSound()
-            
-            rclpy.spin_once(self.node)
-            results = self.model(self.cv_image)
-            self.node.get_clock().sleep_for(Duration(seconds=0.5))
-        return 'target_found'
+        while self.target_found != True: # looping if target is not found
+            rclpy.spin_once(self.node, timeout_sec=0.1)
+            # YOLO detection
+            results = self.model(self.cv_image, conf=0.6)
+            self.rendered_image = results[0].plot()
+            boxes = self.get_krisna_model_result(results)
+            np_boxes = boxes.cpu().numpy()
+        
+            if np_boxes.size == 0:
+                no_detection_count += 1
+                if no_detection_count > 3:
+                    self.playSound()
+            else:
+                self.target_found = True
+                return 'target_found'
+
+            # sleep for 0.1s then detect again
+            self.node.get_clock().sleep_for(Duration(seconds=0.1))

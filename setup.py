@@ -30,10 +30,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "sm_sample1 = lecture04_pkg.sm_sample1:main",
-            "sm_sample2 = lecture04_pkg.sm_sample2:main",
-            "sm_exercise = lecture04_pkg.sm_exercise:main",
             "sm_main = lecture04_pkg.sm_main:main",
+            'camear_calibration = lecture04_pkg.camera_calibration:main',
         ],
     },
 )

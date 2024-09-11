@@ -7,6 +7,9 @@ import cv2
 import cv2.aruco as aruco
 from ultralytics import YOLO
 import threading
+import pygame
+import os
+
 # Import modules (ROS2 related)
 from cv_bridge import CvBridge, CvBridgeError
 import rclpy
@@ -21,7 +24,7 @@ from yasmin import State, Blackboard
 
 class FollowingState(State):
     def __init__(self, node: Node):
-        super().__init__(outcomes=["qr_found", "target_lost"])
+        super().__init__(outcomes=["qr_found", "loop"])
 
         # init ros node
         self.node = node
@@ -45,23 +48,56 @@ class FollowingState(State):
 
         # init model
         self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_krisna2.pt')
-        self.frame_count = 0 # skip using yolo too frequently 
 
-        # init aruco detection
+        # AruCo Markers Detection
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
-        self.parameters = aruco.DetectorParameters()
+        self.aruco_params = aruco.DetectorParameters()
+        self.target_id: int = 0
 
         # init threading
-        self.thread_running = True
-        self.processing_thread = threading.Thread(target=self.image_processing_loop)
-        self.processing_thread.start()
-
+        self.thread_running = False
+        self.processing_thread = None
         self.yolo_result = None
         self.qr_found_flag = False
 
+        # init screaming 
+        self.audio_file = 'lecture04_pkg/sounds/scream.mp3'
+        self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_krisna2.pt')
+        pygame.mixer.init()
+        os.environ["SDL_AUDIODRIVER"] = "pulseaudio"
+
+    def playSound(self):
+        """Playing the audio."""
+        pygame.mixer.music.load(self.audio_file)
+        pygame.mixer.music.play()
+        self.node.get_clock().sleep_for(Duration(seconds=3))
+
+    def start_processing(self):
+        """
+        (Re)initialize flags and start a new processing thread.
+        """
+        # Reset flags so the new thread will run until it sees a break condition again
+        self.thread_running = True
+        self.yolo_result = None
+        self.qr_found_flag = False
+
+        # Make sure any old thread is joined (just in case)
+        if self.processing_thread is not None and self.processing_thread.is_alive():
+            self.thread_running = False
+            self.processing_thread.join()
+
+        # Create and start a brand-new thread
+        self.processing_thread = threading.Thread(target=self.image_processing_loop)
+        self.processing_thread.start()
+
     def cleanup(self):
-        self.thread_running = False
-        self.processing_thread.join()
+        """
+        Stop the processing thread (if running) and join it.
+        """
+        if self.processing_thread is not None and self.processing_thread.is_alive():
+            self.thread_running = False
+            self.processing_thread.join()
+        self.processing_thread = None
 
     def vel_callback(self, msg: Twist):
         """Get robot linear, angular velocity"""
@@ -112,7 +148,7 @@ class FollowingState(State):
 
         who_model_dict = {
             'ali': {'near': 0.4, 'far': 0.1},
-            'krisna': {'near': 0.95, 'far': 0.80}
+            'krisna': {'near': 0.95, 'far': 0.85}
         }
         model_dict = who_model_dict['krisna']
         if box_height > model_dict['near'] * image_heigth:
@@ -144,7 +180,7 @@ class FollowingState(State):
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x - self.speed)
             case 'medium':
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x)
-                if self.cmd_vel.linear.x == 0: # check if there was no velocity published
+                if abs(self.cmd_vel.linear.x) < 0.00001: # check if robot is not moving
                     cmd_vel.linear.x = 0.1
             case 'far':
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x + self.speed)
@@ -159,12 +195,18 @@ class FollowingState(State):
         return cmd_vel
 
     def get_krisna_model_result(self, results):
+        """Get leg bounding box from krisna's model
+        
+        Returns
+        -------
+        boxes: np.array
+            A numpy array with x_center, y_center, width and height of bounding boxes from the first results.
+        """
         boxes_data = results[0].boxes.data
         boxes_xywh = results[0].boxes.xywh 
         mask = boxes_data[:, 5] == 0
         boxes = boxes_xywh[mask]
-
-        return boxes
+        return boxes.cpu().numpy()
 
     def image_processing_loop(self):
         no_detection_count = 0
@@ -174,9 +216,9 @@ class FollowingState(State):
 
             # ArUco detection
             gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
-            detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
+            detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
             _, ids, _ = detector.detectMarkers(gray)
-            if ids is not None and ids[0] == 0:
+            if ids is not None and int(ids[0]) == self.target_id:
                 self.node.get_logger().info(f'detected_id: {str(ids[0])}')
                 self.qr_found_flag = True
                 break  # Exit thread
@@ -185,48 +227,42 @@ class FollowingState(State):
             results = self.model(self.cv_image, conf=0.6)
             boxes = self.get_krisna_model_result(results)
             # self.node.get_logger().info(f'{str(boxes)}')
-            np_boxes = boxes.cpu().numpy()
-            # boxes = results[0].boxes.xywh # ali's model
+            # boxes = results[0].boxes.xywh.cpu().numpy() # ali's model
 
             self.rendered_image = results[0].plot()
 
-            # if len(results[0].boxes.xywh) == 0: # there is no band detected
-            if np_boxes.size == 0:
+            if boxes.size == 0:
                 no_detection_count += 1
                 self.vel_pub.publish(Twist())
-                if no_detection_count > 200:
-                    self.pub_yolo_image()
-                    self.yolo_result = 'target_lost'
-                    break
                 self.pub_yolo_image()
+                if no_detection_count > 20:
+                    self.playSound()
+                    continue
                 continue
             else:
                 no_detection_count = 0
 
-            largest_box = max(boxes.cpu().numpy(), key=lambda x: x[2] * x[3])
-            self.node.get_logger().info(f'-----LARGEST BOX------: {str(largest_box)}')
+            largest_box = max(boxes, key=lambda x: x[2] * x[3])
             posi, dist = self.get_follower_posi_and_dist(largest_box)
-            self.node.get_logger().info(f'POSI: {posi}, DIST: {dist}')
-            self.pub_yolo_image()
             cmd_vel = self.get_dynamic_vel(posi, dist)
             self.vel_pub.publish(cmd_vel)
+            self.pub_yolo_image()
+            # self.node.get_logger().debug(f'-----LARGEST BOX------: {str(largest_box)}')
+            # self.node.get_logger().debug(f'POSI: {posi}, DIST: {dist}')
 
     def execute(self, blackboard: Blackboard) -> str:
         self.node.get_logger().info("Executing Following State")
-        self.qr_found_flag = False  # Reset
-        self.yolo_result = None     # Reset
-
+        self.start_processing()
         while rclpy.ok():
             rclpy.spin_once(self.node, timeout_sec=0.1)
 
             if self.qr_found_flag:
                 self.vel_pub.publish(Twist())  # Stop robot
+                self.cleanup() # clean threads
                 return 'qr_found'
-
-            if self.yolo_result == 'target_lost':
-                self.vel_pub.publish(Twist())  # Stop robot
-                return 'target_lost'
 
             # Sleep a little to reduce CPU usage
             self.node.get_clock().sleep_for(Duration(seconds=5/1000.0))
 
+        self.cleanup() # clean threads
+        return 'loop'
