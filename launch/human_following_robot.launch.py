@@ -28,7 +28,8 @@ def generate_launch_description():
             package='lecture04_pkg',
             executable='sm_main',
             name='state_machine_node',
-            output='screen'
+            output='screen',
+            # arguments=['--ros-args', '--log-level', 'DEBUG']
         ),
         # yasmin_viewer_node settings
         Node(
