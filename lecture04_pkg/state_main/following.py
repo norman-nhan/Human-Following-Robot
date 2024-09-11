@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import cv2.aruco as aruco
 from ultralytics import YOLO
+import threading
 # Import modules (ROS2 related)
 from cv_bridge import CvBridge, CvBridgeError
 import rclpy
@@ -20,7 +21,7 @@ from yasmin import State, Blackboard
 
 class FollowingState(State):
     def __init__(self, node: Node):
-        super().__init__(outcomes=["qr_found", "target_lost", "loop"])
+        super().__init__(outcomes=["qr_found", "target_lost"])
 
         # init ros node
         self.node = node
@@ -38,17 +39,29 @@ class FollowingState(State):
 
         # init robot's velocity command
         self.cmd_vel = Twist()
-        self.max_linear_vel = 0.22
-        self.max_angular_vel = 2.84
+        self.max_linear_vel = 0.22 / 2.0
+        self.max_angular_vel = 2.84 / 2.0
         self.speed = 0.05
 
         # init model
         self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_ali.pt')
-        self.no_detection_count = 0
+        self.frame_count = 0 # skip using yolo too frequently 
 
         # init aruco detection
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
         self.parameters = aruco.DetectorParameters()
+
+        # init threading
+        self.thread_running = True
+        self.processing_thread = threading.Thread(target=self.image_processing_loop)
+        self.processing_thread.start()
+
+        self.yolo_result = None
+        self.qr_found_flag = False
+
+    def cleanup(self):
+        self.thread_running = False
+        self.processing_thread.join()
 
     def vel_callback(self, msg: Twist):
         """Get robot linear, angular velocity"""
@@ -71,7 +84,7 @@ class FollowingState(State):
         except CvBridgeError as e:
             self.node.get_logger().error(f'Error converting image: {e}')
 
-    def get_bounding_boxes(self):
+    def get_bounding_boxes(self, freq_count: int=3):
         """Get all bounding boxes from the first result and draw it.
         
         Returns
@@ -80,9 +93,18 @@ class FollowingState(State):
             A tensor contains a list of boxes. 
 
             Each box contains x_center, y_center, width, height.
+        
+        Parameters
+        ----------
+        freq_count: int
+            - Increasing this value will increase speed but decrease accuracy.
+            - Decreasing this value will decrease speed but increase accuracy.
         """
         assert self.cv_image is not None, "No cv image received."
-        results = self.model(self.cv_image)
+
+        if self.frame_count % freq_count == 0:
+            results = self.model(self.cv_image)
+        self.frame_count += 1
         self.rendered_image = results[0].plot() # Draw results
 
         if len(results[0].boxes.xywh) == 0: # No boxes
@@ -127,7 +149,7 @@ class FollowingState(State):
         # draw onto result
         cv2.putText(self.rendered_image, f'Posi: {posi}, Dist: {dist}', (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-        self.node.get_logger().info(f'posi: {posi}, box_x_center: {box_x_center}, image_height: {image_heigth}')
+        self.node.get_logger().info(f'posi: {posi}, box_x_center: {box_x_center}, image_width: {image_width}')
         self.node.get_logger().info(f'dist: {dist}, box_height: {box_height}')
         return posi, dist
 
@@ -153,50 +175,63 @@ class FollowingState(State):
             case 'left':
                 cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z + self.speed)
             case 'center':
-                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z)
+                cmd_vel.angular.z = 0.0
             case 'right':
                 cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z - self.speed)
         return cmd_vel
 
-    def execute(self, blackboard: Blackboard) -> str:
-        self.node.get_logger().info("Executing Following State")
-        while rclpy.ok():
-            rclpy.spin_once(self.node)
-            ## Handling if cv_image is None
+    def image_processing_loop(self):
+        no_detection_count = 0
+        while self.thread_running:
             if self.cv_image is None:
-                self.node.get_logger().info(f'{self.__class__.__name__}: Waiting for image ...')
                 continue
 
-            ## AruCo marker Dectection ##
+            # ArUco detection
             gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
             detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
             _, ids, _ = detector.detectMarkers(gray)
-            if ids is not None:
+            if ids is not None and ids[0] == 0:
                 self.node.get_logger().info(f'detected_id: {str(ids[0])}')
-                self.vel_pub.publish(Twist()) # send stopping signal to robot
+                self.qr_found_flag = True
+                break  # Exit thread
+
+            # YOLO detection
+            results = self.model(self.cv_image)
+            self.rendered_image = results[0].plot()
+            if len(results[0].boxes.xywh) == 0:
+                no_detection_count += 1
+                if no_detection_count > 10:
+                    self.yolo_result = 'target_lost'
+                    self.pub_yolo_image()
+                    break
+                self.pub_yolo_image()
+                continue
+            else:
+                no_detection_count = 0
+
+            boxes = results[0].boxes.xywh
+            largest_box = max(boxes.cpu().numpy(), key=lambda x: x[2] * x[3])
+            posi, dist = self.get_follower_posi_and_dist(largest_box)
+            self.pub_yolo_image()
+            cmd_vel = self.get_dynamic_vel(posi, dist)
+            self.vel_pub.publish(cmd_vel)
+
+    def execute(self, blackboard: Blackboard) -> str:
+        self.node.get_logger().info("Executing Following State")
+        self.qr_found_flag = False  # Reset
+        self.yolo_result = None     # Reset
+
+        while rclpy.ok():
+            rclpy.spin_once(self.node, timeout_sec=0.1)
+
+            if self.qr_found_flag:
+                self.vel_pub.publish(Twist())  # Stop robot
                 return 'qr_found'
 
-            ## (YOLO) Band bounding box Detection ##
-            boxes = self.get_bounding_boxes()
+            if self.yolo_result == 'target_lost':
+                self.vel_pub.publish(Twist())  # Stop robot
+                return 'target_lost'
 
-            # drawing image
-            if self.rendered_image is None:
-                self.rendered_image = self.cv_image.copy()
+            # Sleep a little to reduce CPU usage
+            self.node.get_clock().sleep_for(Duration(seconds=5/1000.0))
 
-            if boxes is None:  # No boxes
-                self.no_detection_count += 1
-                self.pub_yolo_image()
-                if self.no_detection_count > 20:
-                    self.vel_pub.publish(Twist())
-                    return 'target_lost'
-                else:
-                    self.node.get_clock().sleep_for(Duration(seconds=0.5))
-                    continue
-            else:
-                self.no_detection_count = 0 # reset self.no_detection_count when detected
-            largest_box = max(boxes.cpu().numpy(), key=lambda x: x[2] * x[3]) # get the largest boudning box
-            posi, dist = self.get_follower_posi_and_dist(largest_box)
-            cmd_vel = self.get_dynamic_vel(posi, dist)
-            self.pub_yolo_image()
-            self.node.get_logger().info(f'Sending cmd_vel: {str(cmd_vel)}')
-            self.vel_pub.publish(cmd_vel)

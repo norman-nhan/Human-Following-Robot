@@ -93,10 +93,7 @@ def main(args=None):
     try:
         node = StateMachineNode()
     except KeyboardInterrupt:
-        # pass
-        shutdown(node)
-        node.destroy_node()
-        rclpy.shutdown()
+        pass
     finally:
         shutdown(node)
         node.destroy_node()
