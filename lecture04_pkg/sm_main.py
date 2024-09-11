@@ -13,20 +13,19 @@ from yasmin import StateMachine
 from yasmin_viewer import YasminViewerPub
 
 # Import modules (Custom: Each state)
-from .state_main import init_state, following, go2goal, screaming
-
+from .state_main import (
+    init_state,
+    following, 
+    # go2goal, 
+    # screaming
+)
 class StateMachineNode(Node):
-    """StateMachineNode class (inherits from Node class)
-    Node class that executes the state machine
-    """
-
     def __init__(self):
-        """Class initialization method"""
         super().__init__("sm_main")
 
-        self.get_logger().info("\033[43m\033[30m\033[1m<< PLEASE ENTER TO START >>\033[0m")
-        input()
-        self.get_logger().info("Task Start!!")
+        # self.get_logger().info("\033[43m\033[30m\033[1m<< PLEASE ENTER TO START >>\033[0m")
+        # input() # if you use ros2 launch to run this file, the input will be detached with terminal. So that is why when you press enter, nothing happens. 
+        self.get_logger().info("\033[43m\033[30m\033[1m<< TASKS START >>\033[0m")
 
         self.vel_pub = self.create_publisher(msg_type=Twist, topic="cmd_vel", qos_profile=10)
 
@@ -37,23 +36,26 @@ class StateMachineNode(Node):
         sm.add_state(
             name="InitState",
             state=init_state.InitState(node=self),
-            transitions={'next': "Following"},
+            transitions={'succeed': "FollowingState"},
         )
         sm.add_state(
             name="FollowingState",
             state=following.FollowingState(node=self),
-            transitions={"qr_found": 'Go2GoalState', "target_lost": 'ScreamingState'},
+            transitions={
+                # "qr_found": 'Go2GoalState',
+                # "target_lost": 'ScreamingState'
+            },
         )
-        sm.add_state(
-            name='Go2GoalState',
-            state=go2goal.Go2GoalState(node=self),
-            transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
-        )
-        sm.add_state(
-            name='ScreamingState',
-            state=screaming.ScreamingState(node=self),
-            transitions={'target_found': 'FollowingState'},
-        )
+        # sm.add_state(
+        #     name='Go2GoalState',
+        #     state=go2goal.Go2GoalState(node=self),
+        #     transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
+        # )
+        # sm.add_state(
+        #     name='ScreamingState',
+        #     state=screaming.ScreamingState(node=self),
+        #     transitions={'target_found': 'FollowingState'},
+        # )
 
         # Publish state machine information to Yasmin Viewer
         YasminViewerPub(fsm_name="SM_MAIN", fsm=sm)
@@ -78,11 +80,8 @@ def shutdown(node: Node):
 
 
 def main(args=None):
-    """Main function"""
-    # Initialize ROS2 Python client library
     rclpy.init(args=args)
 
-    # Create an instance of StateMachineNode class
     try:
         node = StateMachineNode()
     except KeyboardInterrupt:

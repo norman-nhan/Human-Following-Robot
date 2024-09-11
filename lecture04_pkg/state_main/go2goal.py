@@ -82,16 +82,19 @@ class Go2GoalState(State):
             self.camera_info_received = True
             self.node.get_logger().info(f"Camera Info received: {self.camera_mat, self.dist_coeffs}")
 
+    def get_aruco_detection_results(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
+        corners, ids, channels = detector.detectMarkers(gray)
+
+        return corners, ids, channels
+
     def detect_and_navigate(self):
         while self.cv_image is None and rclpy.ok():
             self.node.get_logger().info('Waiting for camera image...')
             time.sleep(0.1)
-
-        frame = self.cv_image.copy()
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
-        corners, ids, _ = detector.detectMarkers(gray)
+    
+        corners, ids, _ = self.get_aruco_detection_results(self.cv_image)
 
         if ids is not None:
             rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(

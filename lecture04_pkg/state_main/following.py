@@ -3,7 +3,8 @@
 
 # Import external modules
 import numpy as np
-import cv2, cv2.aruco
+import cv2
+import cv2.aruco as aruco
 from ultralytics import YOLO
 # Import modules (ROS2 related)
 from cv_bridge import CvBridge, CvBridgeError
@@ -19,7 +20,7 @@ from yasmin import State, Blackboard
 
 class FollowingState(State):
     def __init__(self, node: Node):
-        super().__init__(outcomes=["qr_found", "target_lost"])
+        super().__init__(outcomes=["qr_found", "target_lost", "loop"])
 
         # init ros node
         self.node = node
@@ -35,15 +36,18 @@ class FollowingState(State):
 
         # init robot's velocity command
         self.cmd_vel = Twist()
-        self.max_linear_vel = 0.5
-        self.max_angular_vel = 0.3
+        self.max_linear_vel = 1.0
+        self.max_angular_vel = 1.0
+        self.speed = 0.05
 
         # init model
-        self.model = YOLO("../models/best_ali.pt")
+        self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_ali.pt')
 
         # init aruco detection
-        self.dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
-        self.params = cv2.aruco.DetectorParameters_create()
+        self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+        self.parameters = aruco.DetectorParameters()
+
+        self.no_detection_count = 0
 
         self.detect_log = "Initializing"
 
@@ -64,14 +68,22 @@ class FollowingState(State):
         return
 
     def get_bounding_boxes(self):
-        """Get all bounding boxes from the first result."""
+        """Get all bounding boxes from the first result.
+        
+        Returns
+        -------
+        boxes: results[0].boxes.xywh
+            boxes contains a list of boxes. 
+            
+            Each box contains x_center, y_center, width and height.
+        """
         assert self.cv_image is not None, "No cv image received."
         results = self.model(self.cv_image)
 
-        if len(results) == 0 or results[0].boxes is None or results[0].boxes.xywh is None:
+        if len(results[0].boxes.xywh) == 0:
             return None
         
-        boxes = results[0].boxes
+        boxes = results[0].boxes.xywh
         
         return boxes
 
@@ -124,56 +136,63 @@ class FollowingState(State):
 
         match dist: # estimate distance between robot to follower
             case 'near':
-                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x - 0.01)
+                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x - self.speed)
             case 'medium':
                 cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x)
             case 'far':
-                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x + 0.01)
+                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x + self.speed)
         match posi: # follower position in image
             case 'left':
-                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z + 0.01)
+                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z + self.speed)
             case 'center':
                 cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z)
             case 'right':
-                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z - 0.01)
+                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z - self.speed)
 
         return cmd_vel
 
-    def execute(self, blackboard: Blackboard) -> str:
-        self.node.get_logger().info("Following State")
+    def get_aruco_detection_results(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
+        corners, ids, channels = detector.detectMarkers(gray)
 
-        # count 
-        no_detection_count = 0
+        return corners, ids, channels
+
+    def execute(self, blackboard: Blackboard) -> str:
+        self.node.get_logger().info("Executing Following State")
 
         while rclpy.ok():
-            while self.cv_image is None:
-                self.node.get_logger().info('Waiting for image ...')
+            rclpy.spin_once(self.node)
+            
+            ## Handling if cv_image is None
+            if self.cv_image is None:
+                self.node.get_logger().info(f'{self.__class__.__name__}: Waiting for image ...')
+                self.node.get_clock().sleep_for(Duration(seconds=0.5))
+                continue
 
             ## AruCo marker Dectection ##
-            gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
-            (_, ids, _) = cv2.aruco.detectMarkers(gray, self.dict, parameters=self.params)
+            _, ids, _ = self.get_aruco_detection_results(self.cv_image)
             if ids is not None:
-                self.detect_log = "qr_found"
-                self.vel_pub.publish(Twist())
-                return self.detect_log
+                self.node.get_logger().info(f'detected_id: {str(ids[0])}')
+                self.vel_pub.publish(Twist()) # send stopping signal to robot
+                return 'qr_found'
 
             ## (YOLO) Band bounding box Detection ##
             boxes = self.get_bounding_boxes()
-            if boxes is None or boxes.xywh.shape[0] == 0:  # No boxes
-                no_detection_count += 1
-                if no_detection_count > 3:
-                    self.detect_log = 'target_lost'
+            if boxes is None:  # No boxes
+                self.no_detection_count += 1
+                if self.no_detection_count > 20:
                     self.vel_pub.publish(Twist())
-                    return self.detect_log
-                continue
+                    return 'target_lost'
+                else:
+                    self.node.get_clock().sleep_for(Duration(seconds=0.5))
+                    continue
             else:
-                no_detection_count = 0 # reset no_detection_count when detected
+                self.no_detection_count = 0 # reset self.no_detection_count when detected
             
-            largest_box = max(boxes.xywh.cpu().numpy(), key=lambda x: x[2] * x[3]) # get the largest boudning box
+            largest_box = max(boxes.cpu().numpy(), key=lambda x: x[2] * x[3]) # get the largest boudning box
             posi, dist = self.get_follower_posi_and_dist(largest_box)
             cmd_vel = self.get_dynamic_vel(posi, dist)
+            self.node.get_logger().info(f'Sending cmd_vel: {str(cmd_vel)}')
             self.vel_pub.publish(cmd_vel)
-
-            # spin once then wait for 0.5 seconds
-            rclpy.spin_once(self.node)
             self.node.get_clock().sleep_for(Duration(seconds=0.5))

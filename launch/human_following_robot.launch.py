@@ -15,7 +15,15 @@ def generate_launch_description():
         variable_name="use_sim_time",  # Variable name
         default="false"  # Default value
     )
+
     return LaunchDescription([
+        # Define argument (use_sim_time)
+        DeclareLaunchArgument(
+            name="use_sim_time",  # Key name
+            default_value="false",  # Default value
+            description="Use simulation (Gazebo) clock if true",  # Description
+        ),
+        # lecture04_pkg sm_main node settings
         Node(
             package='lecture04_pkg',
             executable='sm_main',
