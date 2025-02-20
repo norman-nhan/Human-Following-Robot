@@ -23,22 +23,29 @@ class FollowingState(State):
     def __init__(self, node: Node):
         super().__init__(outcomes=["ReachingGoal", "TargetLost"])
 
+        # init ros node
         self.node = node
 
+        # init cv image
         self.bridge = CvBridge()
-        
-        self.image_pub = self.node.create_publisher(Image, "masked_image", 10)
+        self.cv_image = None
+
+        # init publishers and subscribers
         self.image_sub = self.node.create_subscription(Image, "image_raw", self.image_callback, 10)
         self.vel_pub = self.node.create_publisher(Twist, "cmd_vel", 10)
-        self.vel_pub = self.node.create_subscription(Twist, "cmd_vel", self.vel_callback, 10)
+        self.vel_sub = self.node.create_subscription(Twist, "cmd_vel", self.vel_callback, 10)
 
+        # init robot's velocity command
         self.cmd_vel = Twist()
         self.max_linear_vel = 0.5
         self.max_angular_vel = 0.3
 
+        # init model
         self.model = YOLO("../models/best_ali.pt")
+
+        # init aruco detection
         self.dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
-        self.aruco_detector_default_params = cv2.aruco.DetectorParameters_create()
+        self.params = cv2.aruco.DetectorParameters_create()
 
         self.detect_log = "Initializing"
 
@@ -56,126 +63,119 @@ class FollowingState(State):
             return
 
     def get_bounding_boxes(self):
-        """Get x_center, y_center, width and height of bounding boxes from the first result.
-        
-        Returns
-        -------
-        Tensor or None 
-        """
-        # predict
+        """Get all bounding boxes from the first result."""
+        assert self.cv_image is not None, "No cv image received."
         results = self.model(self.cv_image)
-        if results is None:
-            return None
-        else:
-            return results[0].boxes.xywh # get 1st result's boxes
 
-    def get_follower_posi_and_dist(self) -> str:
+        if len(results) == 0 or results[0].boxes is None or results[0].boxes.xywh is None:
+            return None
+        
+        boxes = results[0].boxes
+        
+        return boxes
+
+    def get_follower_posi_and_dist(self, largest_box):
         """Get postion of follower in the image.
         
         Returns
         -------
-        follower_position: str
-            position of follower in image: 'left', 'center', 'right', 'out_of_view'.
-        dist2follower: str
-            distance to follower: 'near', 'far', 'median'
+        posi: str
+            position of follower in image: 'left', 'center', 'right'.
+        dist: str
+            distance to follower: 'near', 'far', 'median'.
+
+        Parameters
+        ----------
+        largest_box: list
+            a list contains [x_center, y_center, width, height] of a bounding box
         """
-        largest_box = self.get_largest_box()
-        if largest_box is None:
-            follower_position = 'out_of_view'
-        
-        _, image_width = self.cv_image.shape[:2] # cv_image.shape[:2] gives tuple of (height, width)
+        assert largest_box is not None, "No largest_box received."
+
+        image_heigth, image_width = self.cv_image.shape[:2] # cv_image.shape[:2] gives tuple of (height, width)
         box_x_center, _ = largest_box[:2]
         if box_x_center < image_width / 3.0:
-            follower_position = 'left'
+            posi = 'left'
         elif box_x_center > (2.0/3.0) * image_width:
-            follower_position = 'right'
+            posi = 'right'
         else:
-            follower_position = 'center'
+            posi = 'center'
 
         box_height = largest_box[3]
-        if box_height > 0.6:
-            dist2follower = "near"
-        elif box_height < 0.25:
-            dist2follower = "far"
+        if box_height > 0.6 * image_heigth:
+            dist = "near"
+        elif box_height < 0.25 * image_heigth:
+            dist = "far"
         else:
-            dist2follower = "medium"
+            dist = "medium"
 
-        return follower_position, dist2follower
+        return posi, dist
 
-    def get_dynamic_vel(self) -> Twist:
-        """Get the command velocity based on distance to follower.
+    def get_dynamic_vel(self, posi, dist) -> Twist:
+        """Get the command velocity based on follower's position in image and distance to robot.
         
         Returns
         -------
         cmd_vel: Twist
         """
+        assert posi is not None and dist is not None, "No follower's position and distance received."
+
         cmd_vel = Twist() # init a twist instance to get result
 
-        posi, dist = self.get_follower_posi_and_dist()
-        if dist is None:
-            self.node.get_logger().warn("Cannot receive any position and distance of follower")
-            return None
-        
-        match posi:
+        match dist: # estimate distance between robot to follower
             case 'near':
-                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel - 0.01)
+                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x - 0.01)
             case 'medium':
-                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel)
+                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x)
             case 'far':
-                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel + 0.01)
-        match:
+                cmd_vel.linear.x = min(self.max_linear_vel, self.cmd_vel.linear.x + 0.01)
+        match posi: # follower position in image
             case 'left':
-                cmd_vel.angular
-        return cmd_vel
+                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z + 0.01)
+            case 'center':
+                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z)
+            case 'right':
+                cmd_vel.angular.z = min(self.max_angular_vel, self.cmd_vel.angular.z - 0.01)
 
-    def get_largest_box(self):
-        """Get the biggest bouding box"""
-        boxes = self.get_bounding_boxes()
-        if boxes is None:
-            self.node.get_logger().info("None bounding boxes received")
-            return None
-        
-        ### boxes structure ###
-        # [x_center, y_center, width, height]
-        return max(boxes, key=lambda x: x[2] * x[3]) # get the biggest area boudning box
+        return cmd_vel
 
     def execute(self, blackboard: Blackboard) -> str:
         self.node.get_logger().info("Following State")
 
+        # count 
+        no_detection_count = 0
+
         while rclpy.ok():
             self.node.get_logger().info(self.detect_log)
-        #     self.vel_pub.publish(self.cmd_vel)
-        #     self.node.get_clock().sleep_for(Duration(seconds=0.5))
-        #     rclpy.spin_once(self.node)
 
-        #     if self.detect_log in self.outcomes:
-        #         self.node.get_logger().info(f"State outcome: {self.detect_log}")
-        #         self.vel_pub.publish(Twist())
-        #         self.node.get_clock().sleep_for(Duration(seconds=1))
-        #         return self.detect_log
+            if self.cv_image is None or self.cmd_vel is None:
+                self.node.get_logger().warn('No image nor cmd_vel received.')
+                continue # skip this loop
+            
+            ## AruCo marker Dectection ##
+            gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
+            (_, ids, _) = cv2.aruco.detectMarkers(gray, self.dict, parameters=self.params)
+            if ids is not None:
+                self.detect_log = "ReachingGoal"
+                self.vel_pub.publish(Twist())
+                return self.detect_log
 
-        # results = self.model(self.cv_image) # get the result from YOLO model
-        # # check for an amount of time if we don't have any result 
-        # if results is not None:
-        #     boxes = results[0].boxes.xyxy # get the 1st result's boxes
+            ## (YOLO) Band bounding box Detection ##
+            boxes = self.get_bounding_boxes()
+            if boxes is None or boxes.xywh.shape[0] == 0:  # No boxes
+                no_detection_count += 1
+                if no_detection_count > 3:
+                    self.detect_log = 'TargetLost'
+                    self.vel_pub.publish(Twist())
+                    return self.detect_log
+                continue
+            else:
+                no_detection_count = 0 # reset no_detection_count when detected
+            
+            largest_box = max(boxes.xywh.cpu().numpy(), key=lambda x: x[2] * x[3]) # get the largest boudning box
+            posi, dist = self.get_follower_posi_and_dist(largest_box)
+            cmd_vel = self.get_dynamic_vel(posi, dist)
+            self.vel_pub.publish(cmd_vel)
 
-        #     image_h, image_w = self.cv_image.shape[:2]
-
-        #     if self.tracking_active:
-        #     # ArUco detection (stop override)
-        #     gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        #     (_, ids, _) = cv2.aruco.detectMarkers(gray, self.dictionary, parameters=self.parameters)
-        #     if ids is not None:
-        #         detect_log = "ReachingGoal"
-        #         cmd_vel.linear.x = max(0.00, cmd_vel.linear.x - 0.01)
-        #         cmd_vel.angular.z = 0.00
-
-        #     # Publish masked image (optional: color processing)
-        #     try:
-        #         img_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
-        #         self.image_pub.publish(img_msg)
-        #     except CvBridgeError as e:
-        #         self.node.get_logger().info(str(e))
-
-        #     self.detect_log = detect_log
-        #     self.cmd_vel = cmd_vel
+            # wait for 0.5 seconds then loop
+            rclpy.spin_once(self.node)
+            self.node.get_clock().sleep_for(Duration(seconds=0.5))
