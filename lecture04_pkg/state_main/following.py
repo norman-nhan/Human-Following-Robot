@@ -22,7 +22,6 @@ from yasmin import State
 from yasmin import Blackboard
 
 
-
 class FollowingState(State):
     """FollowingState class (inherits from State class)"""
 
