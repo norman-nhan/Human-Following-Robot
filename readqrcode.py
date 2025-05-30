@@ -59,8 +59,14 @@ while True:
             cv2.putText(frame, f"yaw: {np.degrees(yaw):.1f} deg", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 255, 200), 1)
             cv2.putText(frame, f"desired: {desired_pos.round(2)}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 255, 255), 1)
 
-            break  # Only process first marker
+            # print out rotation matrix & yaw angle
+            # print(f'rotation_matrix: {rot_mat}')
+            # print(f'yaw: {yaw}')
 
+            # send desired_pos to robot's pose topic
+            
+
+            break  # Only process first marker
     cv2.imshow("Aruco Navigation", frame)
     if cv2.waitKey(1) == 27:
         break
