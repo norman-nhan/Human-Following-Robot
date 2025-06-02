@@ -14,11 +14,9 @@ from nav2_msgs.action._navigate_to_pose import (
     NavigateToPose_FeedbackMessage,
 )
 
-from yasmin import State
-from yasmin import Blackboard
+from yasmin import State, Blackboard
 
-from sensor_msgs.msg import CameraInfo
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 from cv_bridge import CvBridge, CvBridgeError
 
 import tf_transformations
@@ -31,7 +29,7 @@ import numpy as np
 import time
 
 
-class Go2Goal(State):
+class Go2GoalState(State):
     """Read AruCo marker then go to goal pose."""
     def __init__(self, node: Node):
         super().__init__(outcomes=['succeed', 'failed'])
@@ -258,15 +256,7 @@ class Go2Goal(State):
         self._feedback = msg.feedback
 
     def execute(self, blackboard: Blackboard) -> str:
-        """Execution method for Go2Goal state
-
-        Args:
-            blackboard (CustomBlackboard): CustomBlackboard object
-
-        Returns:
-            str: outcomes string
-        """
-        self.node.get_logger().info("Go2Goal")
+        self.node.get_logger().info("Go2GoalState")
 
         if not rclpy.ok:
             return "failed"
@@ -283,31 +273,18 @@ class Go2Goal(State):
 
         # Get and display navigation result
         result = self.getResult()
-        # I comment out match expr because my local computer using python version older than 3.10
-        # match result:
-        #     case GoalStatus.STATUS_SUCCEEDED:
-        #         self.node.get_logger().info("Navigation succeeded!")
-        #         return "succeed"
-        #     case GoalStatus.STATUS_CANCELED:
-        #         self.node.get_logger().info("Navigation was canceled!")
-        #         return "failed"
-        #     case GoalStatus.STATUS_ABORTED:
-        #         self.node.get_logger().error("Navigation failed!")
-        #         return "failed"
-        #     case _:
-        #         self.node.get_logger().error("Unknown error!")
-        #         return "failed"
-        if result == GoalStatus.STATUS_SUCCEEDED:
-            self.node.get_logger().info("Navigation succeeded!")
-            return "succeed"
-        elif result == GoalStatus.STATUS_CANCELED:
-            self.node.get_logger().info("Navigation was canceled!")
-            return "failed"
-        elif result == GoalStatus.STATUS_ABORTED:
-            self.node.get_logger().error("Navigation failed!")
-            return "failed"
-        else:
-            self.node.get_logger().error("Unknown error!")
-            return "failed"
+        match result:
+            case GoalStatus.STATUS_SUCCEEDED:
+                self.node.get_logger().info("Navigation succeeded!")
+                return "succeed"
+            case GoalStatus.STATUS_CANCELED:
+                self.node.get_logger().info("Navigation was canceled!")
+                return "failed"
+            case GoalStatus.STATUS_ABORTED:
+                self.node.get_logger().error("Navigation failed!")
+                return "failed"
+            case _:
+                self.node.get_logger().error("Unknown error!")
+                return "failed"
 
         return "succeed"

@@ -7,21 +7,19 @@ import cv2, cv2.aruco
 from ultralytics import YOLO
 # Import modules (ROS2 related)
 from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Image
 
 # Import modules (YASMIN related)
 # https://github.com/uleroboticsgroup/yasmin.git
-from sensor_msgs.msg import Image
-from yasmin import State
-from yasmin import Blackboard
-
+from yasmin import State, Blackboard
 
 class FollowingState(State):
     def __init__(self, node: Node):
-        super().__init__(outcomes=["ReachingGoal", "TargetLost"])
+        super().__init__(outcomes=["qr_found", "target_lost"])
 
         # init ros node
         self.node = node
@@ -51,16 +49,19 @@ class FollowingState(State):
 
     def vel_callback(self, msg: Twist):
         """Get robot linear, angular velocity"""
+        self.node.get_logger().info('Receiving cmd vel')
         self.cmd_vel = msg
         return
     
     def image_callback(self, msg: Image): 
         """Get a cv image."""
+        self.node.get_logger().info('Receiving image')
         try:
             self.cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8") # pass cv image to self.cv_image
         except CvBridgeError as e:
             self.node.get_logger().info(str(e))
-            return
+
+        return
 
     def get_bounding_boxes(self):
         """Get all bounding boxes from the first result."""
@@ -145,17 +146,14 @@ class FollowingState(State):
         no_detection_count = 0
 
         while rclpy.ok():
-            self.node.get_logger().info(self.detect_log)
+            while self.cv_image is None:
+                self.node.get_logger().info('Waiting for image ...')
 
-            if self.cv_image is None or self.cmd_vel is None:
-                self.node.get_logger().warn('No image nor cmd_vel received.')
-                continue # skip this loop
-            
             ## AruCo marker Dectection ##
             gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
             (_, ids, _) = cv2.aruco.detectMarkers(gray, self.dict, parameters=self.params)
             if ids is not None:
-                self.detect_log = "ReachingGoal"
+                self.detect_log = "qr_found"
                 self.vel_pub.publish(Twist())
                 return self.detect_log
 
@@ -164,7 +162,7 @@ class FollowingState(State):
             if boxes is None or boxes.xywh.shape[0] == 0:  # No boxes
                 no_detection_count += 1
                 if no_detection_count > 3:
-                    self.detect_log = 'TargetLost'
+                    self.detect_log = 'target_lost'
                     self.vel_pub.publish(Twist())
                     return self.detect_log
                 continue
@@ -176,6 +174,6 @@ class FollowingState(State):
             cmd_vel = self.get_dynamic_vel(posi, dist)
             self.vel_pub.publish(cmd_vel)
 
-            # wait for 0.5 seconds then loop
+            # spin once then wait for 0.5 seconds
             rclpy.spin_once(self.node)
             self.node.get_clock().sleep_for(Duration(seconds=0.5))

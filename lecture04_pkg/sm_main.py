@@ -7,14 +7,13 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 from geometry_msgs.msg import Twist
 
-
 # Import modules (YASMIN related)
 # https://github.com/uleroboticsgroup/yasmin.git
 from yasmin import StateMachine
 from yasmin_viewer import YasminViewerPub
 
 # Import modules (Custom: Each state)
-from .states import following
+from .state_main import init_state, following, go2goal, screaming
 
 class StateMachineNode(Node):
     """StateMachineNode class (inherits from Node class)
@@ -34,34 +33,26 @@ class StateMachineNode(Node):
         # Create an instance of the StateMachine class
         sm = StateMachine(outcomes=["EXIT"])
 
-        # Add InitializationState to the state machine
+        ## Adding states
         sm.add_state(
-            name="Initialization",
-            state=???(node=self),
-            transitions={???: "Following"},
+            name="InitState",
+            state=init_state.InitState(node=self),
+            transitions={'next': "Following"},
         )
-
-        # Add FollowingState to the state machine
         sm.add_state(
-            name="Following",
+            name="FollowingState",
             state=following.FollowingState(node=self),
-            transitions={"QRFound": ???, "TargetLost":???},
+            transitions={"qr_found": 'Go2GoalState', "target_lost": 'ScreamingState'},
         )
-
-        # Add ???State to the state machine
-        # Searching for the newly lost target       
         sm.add_state(
-            name=???,
-            state=???(node=self),
-            transitions={"TargetFound": "Following"},
+            name='Go2GoalState',
+            state=go2goal.Go2GoalState(node=self),
+            transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
         )
-
-        # Add ???State to the state machine
-        # Using QR Code to reach the goal       
         sm.add_state(
-            name=???,
-            state=???(node=self),
-            transitions={???: "EXIT"},
+            name='ScreamingState',
+            state=screaming.ScreamingState(node=self),
+            transitions={'target_found': 'FollowingState'},
         )
 
         # Publish state machine information to Yasmin Viewer
@@ -100,7 +91,6 @@ def main(args=None):
         shutdown(node)
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()
