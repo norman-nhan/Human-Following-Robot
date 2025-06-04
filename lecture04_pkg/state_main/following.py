@@ -21,7 +21,7 @@ from sensor_msgs.msg import Image
 # Import modules (YASMIN related)
 # https://github.com/uleroboticsgroup/yasmin.git
 from yasmin import State, Blackboard
-
+import time
 class FollowingState(State):
     def __init__(self, node: Node):
         super().__init__(outcomes=["qr_found", "loop"])
@@ -61,7 +61,7 @@ class FollowingState(State):
         self.qr_found_flag = False
 
         # init screaming 
-        self.audio_file = 'lecture04_pkg/sounds/scream.mp3'
+        self.audio_file = '/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/sounds/gojo_modore.mp3'
         self.model = YOLO('/home/ros2/ros2_lecture_ws/src/7_lectures/lecture04_pkg/lecture04_pkg/models/best_krisna2.pt')
         pygame.mixer.init()
         os.environ["SDL_AUDIODRIVER"] = "pulseaudio"
@@ -70,8 +70,8 @@ class FollowingState(State):
         """Playing the audio."""
         pygame.mixer.music.load(self.audio_file)
         pygame.mixer.music.play()
-        self.node.get_clock().sleep_for(Duration(seconds=3))
-
+        # self.node.get_clock().sleep_for(Duration(seconds=3))
+        time.sleep(5)
     def start_processing(self):
         """
         (Re)initialize flags and start a new processing thread.
@@ -148,7 +148,7 @@ class FollowingState(State):
 
         who_model_dict = {
             'ali': {'near': 0.4, 'far': 0.1},
-            'krisna': {'near': 0.95, 'far': 0.85}
+            'krisna': {'near': 0.95, 'far': 0.90}
         }
         model_dict = who_model_dict['krisna']
         if box_height > model_dict['near'] * image_heigth:
@@ -235,7 +235,7 @@ class FollowingState(State):
                 no_detection_count += 1
                 self.vel_pub.publish(Twist())
                 self.pub_yolo_image()
-                if no_detection_count > 20:
+                if no_detection_count > 5:
                     self.playSound()
                     continue
                 continue

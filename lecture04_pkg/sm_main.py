@@ -37,38 +37,25 @@ class StateMachineNode(Node):
             name="InitState",
             state=init_state.InitState(node=self),
             transitions={
-                # 'succeed': "FollowingState",
-                'succeed': 'Go2GoalState'
+                'succeed': "FollowingState",
+                # 'succeed': 'Go2GoalState'
             },
         )
-        # sm.add_state(
-        #     name="FollowingState",
-        #     state=following.FollowingState(node=self),
-        #     transitions={
-        #         'loop': 'FollowingState',
-        #         "qr_found": 'Go2GoalState',
-                # 'qr_found': 'DummyState',
-                # 'target_lost': 'DummyState',
-                # "target_lost": 'ScreamingState'
-        #     },
-        # )
+        sm.add_state(
+            name="FollowingState",
+            state=following.FollowingState(node=self),
+            transitions={
+                'loop': 'FollowingState',
+                "qr_found": 'Go2GoalState',
+            },
+        )
         sm.add_state(
             name='Go2GoalState',
             state=go2goal.Go2GoalState(node=self),
-            transitions={'succeed': 'EXIT', 'failed': 'Go2GoalState'},
-        )
-        # sm.add_state(
-        #     name='ScreamingState',
-        #     state=screaming.ScreamingState(node=self),
-        #     transitions={
-        #         'target_found': 'FollowingState',
-        #         'exit': 'EXIT'},
-        # )
-        sm.add_state(
-            name='DummyState',
-            state=init_state.DummyState(node=self),
             transitions={
-                'loop': 'DummyState',
+                'succeed': 'EXIT',  
+                'failed': 'Go2GoalState',
+                'qr_lost': 'FollowingState'
             },
         )
 
