@@ -96,10 +96,14 @@ class Go2GoalState(State):
         pose_msg.pose.orientation.z = quat[2]
         pose_msg.pose.orientation.w = quat[3]
 
-        self.nav_to_pose_client.wait_for_server()
+        # Wait for the action server
+        if not self.nav_to_pose_client.wait_for_server(timeout_sec=5.0):
+            self.node.get_logger().error("NavigateToPose action server not available!")
+            return False        
+        
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = pose_msg
-        self.nav_to_pose_client.send_goal_async(goal_msg)
+        
         send_goal_future = self.nav_to_pose_client.send_goal_async(
             goal=goal_msg,  # Goal message
             feedback_callback=self._feedbackcallback,  # Callback method
@@ -113,6 +117,15 @@ class Go2GoalState(State):
 
         # Set up to get the result asynchronously
         self._result_future = self._goal_handle.get_result_async()
+        self.node.get_logger().info("Goal accepted, waiting for result...")
+
+        result = self._result_future.result()
+        if result.status == GoalStatus.STATUS_SUCCEEDED:
+            self.node.get_logger().info("Navigation succeeded!")
+            return True
+        else:
+            self.node.get_logger().error(f"Navigation failed with status code: {result.status}")
+            return False
 
     def detect_aruco(self):
         while self.cv_image is None:
@@ -277,34 +290,14 @@ class Go2GoalState(State):
 
         while rclpy.ok():
             if self.is_lock:
-                break 
+                # We have detected the marker and computed T_goal_robot
+                success = self.move_to_goal(self.T_goal_robot)
+                if success:
+                    return "succeed"
+                else:
+                    return "failed"
+            
             self.detect_aruco()
             rclpy.spin_once(self.node)
-        # if not rclpy.ok():
-        #     return "failed"
-        
-        # Wait until navigation is complete
-        # while not self.isNavComplete():
-        #     # Get feedback message
-        #     feedback = self.getFeedback()
-        #     # Cancel if navigation takes more than 30 seconds
-        #     if feedback.navigation_time.sec > 30:
-        #         self.cancelNav()  # Cancel the ongoing navigation
 
-        # # Get and display navigation result
-        # result = self.getResult()
-        # match result:
-        #     case GoalStatus.STATUS_SUCCEEDED:
-        #         self.node.get_logger().info("Navigation succeeded!")
-        #         return "succeed"
-        #     case GoalStatus.STATUS_CANCELED:
-        #         self.node.get_logger().info("Navigation was canceled!")
-        #         return "failed"
-        #     case GoalStatus.STATUS_ABORTED:
-        #         self.node.get_logger().error("Navigation failed!")
-        #         return "failed"
-        #     case _:
-        #         self.node.get_logger().error("Unknown error!")
-        #         return "failed"
-
-        return "succeed"
+        return "failed"  # if rclpy is shutdown before detection/navigation
