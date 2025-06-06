@@ -1,5 +1,21 @@
 # Human-Following-Robot
 Project for Practicum in ROS class
+
+## Acknowledgment (June 6, 2025)
+
+This project was developed as part of the _Practicum in ROS_ course. We would like to express our gratitude to the course instructors and the creators of the original course materials provided at [Kyutech ROS Lecture 2025](https://www.brain.kyutech.ac.jp/~tamukoh/lecture/ros_lecture/ros2025/). Their resources formed the foundation of our work.
+
+Special thanks to the following team members for their contributions:
+
+- **Krisna Pinasthika** (Student ID: 24899030)  
+- **Kanyarak Klaichit** (Student ID: 24966067)  
+- **Mohsin Ali** (Student ID: 24966066)  
+- **Killian Bertrand** (Student ID: 25966055)
+
+We built upon and modified the provided class materials to complete this project, learning valuable skills in ROS development and collaborative robotics programming.
+
+---
+
 # Lecture 4: State Machine, roslaunch2
 
 ## 1. Preparation
