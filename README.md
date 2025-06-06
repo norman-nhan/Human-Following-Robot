@@ -11,6 +11,7 @@ Special thanks to the following team members for their contributions:
 - **Kanyarak Klaichit** (Student ID: 24966067)  
 - **Mohsin Ali** (Student ID: 24966066)  
 - **Killian Bertrand** (Student ID: 25966055)
+- **Tang Phu Thien Nhan** (Student ID: 25966041)
 
 We built upon and modified the provided class materials to complete this project, learning valuable skills in ROS development and collaborative robotics programming.
 
